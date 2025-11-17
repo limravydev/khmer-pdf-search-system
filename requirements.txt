@@ -1,4 +1,6 @@
 streamlit
 pdfplumber
+pillow
+pytesseract
 sentence-transformers
-numpy
+faiss-cpu
