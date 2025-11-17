@@ -1,74 +1,67 @@
 # extract_text.py
-"""
-Khmer OCR-based text extraction for PDF files.
-
-This module uses:
-- pdfplumber  : to open PDF and render pages as images
-- pytesseract : to perform OCR with Khmer language model ("khm")
-
-Usage:
-    from extract_text import extract_text_from_pdf
-    text = extract_text_from_pdf("path/to/file.pdf")
-"""
+import io
+from typing import Optional
 
 import pdfplumber
-import pytesseract
-from PIL import Image, ImageFilter, ImageOps
+from PIL import Image
+
+try:
+    import pytesseract
+    from pytesseract import TesseractError
+    HAS_PYTESSERACT = True
+except Exception:
+    HAS_PYTESSERACT = False
+    TesseractError = Exception  # dummy
 
 
-def ocr_page(page, dpi: int = 400) -> str:
+def ocr_image(img: Image.Image) -> str:
     """
-    Render a single PDF page to an image and run Khmer OCR on it.
-
-    Args:
-        page: pdfplumber.page.Page object
-        dpi: resolution used to render the page (higher = slower but clearer)
-
-    Returns:
-        OCR'd text for that page as a string.
+    Run OCR on a PIL image, trying Khmer first,
+    then falling back to default Tesseract language.
+    Never raises TesseractError.
     """
-    # Render the page as a high-resolution PIL image
-    img: Image.Image = page.to_image(resolution=dpi).original
+    if not HAS_PYTESSERACT:
+        return ""
 
-    # --- Basic preprocessing to help Tesseract ---
-    # 1) Convert to grayscale
-    img = img.convert("L")
+    # Common config: treat as block of text
+    config = "--psm 6"
 
-    # 2) Auto-contrast to improve text visibility
-    img = ImageOps.autocontrast(img)
+    # 1) Try Khmer language (if available)
+    for lang in ["khm", None]:  # None = Tesseract default (often eng)
+        try:
+            if lang is None:
+                text = pytesseract.image_to_string(img, config=config)
+            else:
+                text = pytesseract.image_to_string(img, lang=lang, config=config)
+            if text:
+                return text
+        except TesseractError:
+            # If lang is missing or Tesseract fails, try next option
+            continue
+        except Exception:
+            continue
 
-    # 3) Apply a small median filter to reduce noise
-    img = img.filter(ImageFilter.MedianFilter(size=3))
-
-    # Tesseract OCR configuration:
-    # --psm 6 : Assume a uniform block of text
-    # --oem 3 : Default LSTM OCR engine
-    config = "--psm 6 --oem 3"
-
-    # Run OCR with Khmer language model
-    text = pytesseract.image_to_string(img, lang="khm", config=config)
-
-    return text
+    return ""
 
 
 def extract_text_from_pdf(pdf_path: str) -> str:
     """
-    Extract text from a PDF file using pure Khmer OCR on each page.
-
-    This version does *not* rely on PDF's embedded text; it always uses OCR.
-    That is safer for scanned PDFs and matches the requirement "use OCR".
-
-    Args:
-        pdf_path: path to PDF file
-
-    Returns:
-        Full text of the PDF (all pages concatenated).
+    Extract text from a PDF using OCR for each page.
+    Returns a single string with all pages concatenated.
+    Never raises if OCR fails.
     """
-    texts = []
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            texts = []
+            for page in pdf.pages:
+                # Render page as image
+                page_img = page.to_image(resolution=300).original
+                # Ensure it's a PIL Image
+                if not isinstance(page_img, Image.Image):
+                    page_img = Image.fromarray(page_img)
+                page_text = ocr_image(page_img)
+                texts.append(page_text)
+    except Exception:
+        return ""
 
-    with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages:
-            page_text = ocr_page(page)
-            texts.append(page_text)
-
-    return "\n".join(texts)
+    return "\n\n".join(t.strip() for t in texts if t.strip())
