@@ -29,6 +29,7 @@ from sentence_transformers import SentenceTransformer
 # -------------------------------------------------------------------
 INDEX_PATH = "index.json"
 MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+# MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L6-v2"
 
 # -------------------------------------------------------------------
 # Global state (in-memory)
