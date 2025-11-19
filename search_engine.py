@@ -1,6 +1,24 @@
 # search_engine.py
-import os
+"""
+Simple search engine for Khmer PDF Search System.
+
+Public API (used by app.py):
+
+    add_document(filename: str, text: str) -> None
+    search(query: str, k: int = 10) -> List[dict]
+
+Each search() result item looks like:
+    {
+        "filename": str,
+        "text": str,
+        "score": float,
+    }
+
+Index is stored in "index.json" in the project folder.
+"""
+
 import json
+import os
 from typing import List, Dict, Any, Optional
 
 import numpy as np
@@ -9,134 +27,132 @@ from sentence_transformers import SentenceTransformer
 # -------------------------------------------------------------------
 # Config
 # -------------------------------------------------------------------
-DB_DIR = "database"
-DB_PATH = os.path.join(DB_DIR, "docs.json")
+INDEX_PATH = "index.json"
+MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
-os.makedirs(DB_DIR, exist_ok=True)
-
-MODEL_NAME = "sentence-transformers/distiluse-base-multilingual-cased-v2"
-model: SentenceTransformer = SentenceTransformer(MODEL_NAME)
-
-# In-memory storage
-docs: List[Dict[str, Any]] = []
-emb_matrix: Optional[np.ndarray] = None  # shape (N, D)
+# -------------------------------------------------------------------
+# Global state (in-memory)
+# -------------------------------------------------------------------
+_docs: List[Dict[str, Any]] = []
+_emb_matrix: Optional[np.ndarray] = None
+_model: Optional[SentenceTransformer] = None
 
 
 # -------------------------------------------------------------------
 # Internal helpers
 # -------------------------------------------------------------------
-def _normalize(vec: np.ndarray) -> np.ndarray:
-    """L2-normalize a 1D or 2D vector."""
-    if vec.ndim == 1:
-        norm = np.linalg.norm(vec) + 1e-10
-        return vec / norm
-    norms = np.linalg.norm(vec, axis=1, keepdims=True) + 1e-10
-    return vec / norms
+
+def _get_model() -> SentenceTransformer:
+    """Load the SentenceTransformer model once per process."""
+    global _model
+    if _model is None:
+        _model = SentenceTransformer(MODEL_NAME)
+    return _model
 
 
-def _save_db() -> None:
-    """Save docs (including embeddings) to JSON."""
-    with open(DB_PATH, "w", encoding="utf-8") as f:
-        json.dump(docs, f, ensure_ascii=False, indent=2)
-
-
-def _rebuild_emb_matrix() -> None:
-    """Rebuild NumPy embedding matrix from docs list."""
-    global emb_matrix
-    if not docs:
-        emb_matrix = None
-        return
-
-    emb_matrix = np.array([d["embedding"] for d in docs], dtype="float32")
-
-
-def _load_db() -> None:
-    """Load docs from JSON, deduplicate by filename, recompute embeddings."""
-    global docs, emb_matrix
-
-    if not os.path.exists(DB_PATH):
-        docs = []
-        emb_matrix = None
+def _load_index() -> None:
+    """Load docs from disk into _docs."""
+    global _docs
+    if not os.path.exists(INDEX_PATH):
+        _docs = []
         return
 
     try:
-        with open(DB_PATH, "r", encoding="utf-8") as f:
-            raw = json.load(f)
+        with open(INDEX_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        # Expect a list of documents
+        if isinstance(data, list):
+            _docs = data
+        elif isinstance(data, dict) and isinstance(data.get("documents"), list):
+            # allow old format: {"documents": [...]}
+            _docs = data["documents"]
+        else:
+            _docs = []
     except Exception:
-        docs = []
-        emb_matrix = None
+        _docs = []
+
+
+def _save_index() -> None:
+    """Persist _docs to disk."""
+    with open(INDEX_PATH, "w", encoding="utf-8") as f:
+        json.dump(_docs, f, ensure_ascii=False, indent=2)
+
+
+def _rebuild_emb_matrix() -> None:
+    """Rebuild the embedding matrix from _docs."""
+    global _emb_matrix
+
+    if not _docs:
+        _emb_matrix = None
         return
 
-    if not isinstance(raw, list):
-        docs = []
-        emb_matrix = None
-        return
-
-    # Deduplicate by filename (keep last)
-    by_filename: Dict[str, Dict[str, Any]] = {}
-    for item in raw:
-        fn = item.get("filename")
-        if not fn:
+    embs = []
+    for d in _docs:
+        emb_list = d.get("embedding")
+        if not emb_list:
             continue
-        by_filename[fn] = {
-            "filename": fn,
-            "text": item.get("text", ""),
-        }
+        emb = np.asarray(emb_list, dtype=np.float32)
+        norm = np.linalg.norm(emb)
+        if norm > 0:
+            emb = emb / norm
+        embs.append(emb)
 
-    docs = list(by_filename.values())
-
-    if not docs:
-        emb_matrix = None
+    if not embs:
+        _emb_matrix = None
         return
 
-    texts = [d["text"] for d in docs]
-    embs = model.encode(texts, batch_size=8, show_progress_bar=False)
-    embs = np.asarray(embs, dtype="float32")
-    embs = _normalize(embs)
-
-    for d, e in zip(docs, embs):
-        d["embedding"] = e.tolist()
-
-    emb_matrix = embs
-    _save_db()
+    _emb_matrix = np.stack(embs, axis=0)  # (N, D)
 
 
-# Load database once at import
-_load_db()
+# Load index when module is imported
+_load_index()
+_rebuild_emb_matrix()
 
 
 # -------------------------------------------------------------------
 # Public API
 # -------------------------------------------------------------------
+
 def add_document(filename: str, text: str) -> None:
     """
-    Add or update a document.
+    Add or update a document in the index.
 
-    - If filename already exists, its text & embedding are UPDATED (no duplicates).
-    - If it's new, it is appended.
+    - filename: PDF filename (used as key)
+    - text: full extracted text (Khmer + English, OCR result)
+
+    This function:
+        * computes an embedding for the text
+        * updates or appends the document
+        * saves the index
+        * rebuilds the in-memory embedding matrix
     """
-    global docs, emb_matrix
+    global _docs
 
     if not text or not text.strip():
         return
 
-    # Compute normalized embedding
-    emb = model.encode([text], show_progress_bar=False)[0]
-    emb = np.asarray(emb, dtype="float32")
-    emb = _normalize(emb)
+    filename = os.path.basename(filename)
 
-    # Find existing document by filename
-    existing_idx = None
-    for i, d in enumerate(docs):
-        if d["filename"] == filename:
-            existing_idx = i
+    model = _get_model()
+    # encode single string -> 1D numpy array
+    emb = model.encode(text, convert_to_numpy=True)
+    emb = emb.astype(np.float32)
+    norm = np.linalg.norm(emb)
+    if norm > 0:
+        emb = emb / norm
+
+    # check if doc already exists
+    existing = None
+    for d in _docs:
+        if d.get("filename") == filename:
+            existing = d
             break
 
-    if existing_idx is not None:
-        docs[existing_idx]["text"] = text
-        docs[existing_idx]["embedding"] = emb.tolist()
+    if existing is not None:
+        existing["text"] = text
+        existing["embedding"] = emb.tolist()
     else:
-        docs.append(
+        _docs.append(
             {
                 "filename": filename,
                 "text": text,
@@ -144,103 +160,56 @@ def add_document(filename: str, text: str) -> None:
             }
         )
 
+    _save_index()
     _rebuild_emb_matrix()
-    _save_db()
 
 
-def search(query: str, k: int = 5) -> List[Dict[str, Any]]:
+def search(query: str, k: int = 10) -> List[Dict[str, Any]]:
     """
-    Search for the top-k most similar documents for the given query.
+    Search the index for the top-k most similar documents.
 
-    Returns a list of document dicts:
-        { "filename": ..., "text": ..., "score": float }
+    Your app calls: raw_results = search(query)
+
+    Returns a list of dicts:
+        {
+            "filename": str,
+            "text": str,
+            "score": float,
+        }
     """
-    if not docs or emb_matrix is None:
+    query = (query or "").strip()
+    if not query:
         return []
 
-    # Query embedding
-    q_emb = model.encode([query], show_progress_bar=False)[0]
-    q_emb = np.asarray(q_emb, dtype="float32")
-    q_emb = _normalize(q_emb)
+    if not _docs or _emb_matrix is None or _emb_matrix.size == 0:
+        return []
 
-    # Cosine similarity = dot product for normalized vectors
-    sims = emb_matrix @ q_emb  # shape (N,)
+    model = _get_model()
+    q_emb = model.encode(query, convert_to_numpy=True)
+    q_emb = q_emb.astype(np.float32)
+    norm = np.linalg.norm(q_emb)
+    if norm == 0:
+        return []
 
-    # Top-k indices
-    top_k = min(k, len(docs))
-    idxs = np.argsort(-sims)[:top_k]
+    q_emb = q_emb / norm
+
+    # cosine sim because all vectors are unit-normalized
+    scores = _emb_matrix @ q_emb  # shape (N,)
+
+    k = min(k, scores.shape[0])
+    # indices of top-k scores
+    top_idx = np.argsort(scores)[-k:][::-1]
 
     results: List[Dict[str, Any]] = []
-    for i in idxs:
-        d = docs[int(i)]
-        item = {
-            "filename": d["filename"],
-            "text": d["text"],
-            "score": float(sims[int(i)]),
-        }
-        results.append(item)
+    for idx in top_idx:
+        d = _docs[int(idx)]
+        score = float(scores[int(idx)])
+        results.append(
+            {
+                "filename": d.get("filename", ""),
+                "text": d.get("text", ""),
+                "score": score,
+            }
+        )
 
     return results
-
-
-def clean_missing_files(pdf_dir: str = "pdf_storage") -> None:
-    """
-    Remove indexed documents if the corresponding PDF file
-    is missing in the pdf_storage/ folder.
-    """
-    global docs, emb_matrix
-
-    if not os.path.exists(pdf_dir):
-        return
-
-    valid_docs = []
-    for d in docs:
-        filename = d["filename"]
-        pdf_path = os.path.join(pdf_dir, filename)
-        if os.path.exists(pdf_path):
-            valid_docs.append(d)
-
-    if len(valid_docs) != len(docs):
-        docs = valid_docs
-        _rebuild_emb_matrix()
-        _save_db()
-
-
-def get_index_stats(pdf_dir: str = "pdf_storage") -> Dict[str, Any]:
-    """
-    Return simple statistics about the index:
-      - indexed_docs: number of docs in index
-      - indexed_filenames: list of filenames in index
-      - orphan_docs: docs in index whose PDF file is missing
-    """
-    if not docs:
-        return {
-            "indexed_docs": 0,
-            "indexed_filenames": [],
-            "orphan_docs": 0,
-        }
-
-    indexed_filenames = [d["filename"] for d in docs]
-
-    missing = 0
-    if os.path.exists(pdf_dir):
-        for fn in indexed_filenames:
-            if not os.path.exists(os.path.join(pdf_dir, fn)):
-                missing += 1
-
-    return {
-        "indexed_docs": len(docs),
-        "indexed_filenames": indexed_filenames,
-        "orphan_docs": missing,
-    }
-
-
-def get_document_text(filename: str) -> str:
-    """
-    Return the stored text for a document from the index.
-    If not found, returns "".
-    """
-    for d in docs:
-        if d["filename"] == filename:
-            return d.get("text", "")
-    return ""

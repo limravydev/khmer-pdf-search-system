@@ -9,14 +9,17 @@ import streamlit as st
 import pdfplumber  # for PDF page preview as image
 from PIL import Image
 
+# from extract_text import extract_text_from_pdf
+# from search_engine import (
+#     add_document,
+#     search,
+#     clean_missing_files,
+#     get_index_stats,
+#     get_document_text,
+# )
+
 from extract_text import extract_text_from_pdf
-from search_engine import (
-    add_document,
-    search,
-    clean_missing_files,
-    get_index_stats,
-    get_document_text,
-)
+from search_engine import add_document, search
 
 # --------------------------------------------------------
 # Page config
@@ -151,7 +154,7 @@ def highlight(text: str, query: str) -> str:
 # --------------------------------------------------------
 # Clean index + compute stats
 # --------------------------------------------------------
-clean_missing_files()
+# clean_missing_files()
 
 # Count PDFs in folder
 if os.path.exists("pdf_storage"):
@@ -162,7 +165,7 @@ if os.path.exists("pdf_storage"):
 else:
     pdf_files = []
 
-stats = get_index_stats(pdf_dir="pdf_storage")
+# stats = get_index_stats(pdf_dir="pdf_storage")
 
 # --------------------------------------------------------
 # Title + Stats bar + Tabs
@@ -173,8 +176,8 @@ st.caption("Upload Khmer PDFs, run OCR, and search them by keyword (Khmer or Eng
 with st.container():
     col_a, col_b, col_c = st.columns(3)
     col_a.metric("Uploaded PDFs", len(pdf_files))
-    col_b.metric("Indexed documents", stats["indexed_docs"])
-    col_c.metric("Orphan docs", stats["orphan_docs"])
+    # col_b.metric("Indexed documents", stats["indexed_docs"])
+    # col_c.metric("Orphan docs", stats["orphan_docs"])
 
 st.markdown("---")
 
