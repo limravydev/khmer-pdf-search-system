@@ -240,15 +240,20 @@ with tab_upload:
                     # Open PDF and render selected page as an image
                     with pdfplumber.open(st.session_state.current_pdf_path) as pdf:
                         num_pages = len(pdf.pages)
-                        page_num = st.slider(
-                            "Page",
-                            min_value=1,
-                            max_value=max(num_pages, 1),
-                            value=1,
-                            key="pdf_preview_page",
-                        )
+
+                        if num_pages > 1:
+                            page_num = st.slider(
+                                "Page",
+                                min_value=1,
+                                max_value=num_pages,
+                                value=1,
+                                key="pdf_preview_page",
+                            )
+                        else:
+                            page_num = 1
+
                         page = pdf.pages[page_num - 1]
-                        pil_img: Image.Image = page.to_image(resolution=150).original
+                        pil_img = page.to_image(resolution=150).original
 
                     # Convert PIL image to PNG bytes
                     buf = io.BytesIO()
