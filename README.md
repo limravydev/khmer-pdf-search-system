@@ -1,111 +1,162 @@
-# Khmer PDF Search System
+# Khmer PDF Search System  
+AUPP – NLP Course Project  
 
-A Streamlit-based NLP application that allows users to upload Khmer PDF
-documents, extract text (OCR-friendly), index them with multilingual
-sentence embeddings, and search using both **semantic similarity** and
-**exact keyword matching**.\
-Designed for Khmer-language documents with a simple editor interface for
-manual text correction.
+A Streamlit application that extracts text from Khmer PDF documents using OCR, indexes them using vector embeddings, and provides fast keyword + semantic search.  
+The system includes a built-in PDF previewer, an editable OCR text panel, and a document management interface.
 
-## 📌 Features
+---
 
-### ✔ PDF Upload & Text Extraction
+## 🚀 Features
 
--   Upload any Khmer PDF file (scanned or digital)
--   Automatic text extraction via pdfplumber
--   Editable text area for manual correction
--   Download original PDF anytime
+### **1. Khmer OCR (Optical Character Recognition)**
+- Extracts text from scanned Khmer PDFs  
+- Uses Tesseract OCR (with Khmer traineddata when available)  
+- Robust fallback handling if Khmer OCR is not supported in the environment  
+- Page-by-page OCR for higher accuracy
 
-### ✔ Intelligent Search
+### **2. Scrollable PDF Preview (Image-based)**
+- Secure PDF rendering using `pdfplumber`  
+- Avoids Chrome PDF-plugin blocking  
+- Clean viewer with:
+  - Vertical scroll
+  - Rounded border
+  - Page selector
 
--   Search in **Khmer or English**
--   Hybrid retrieval:
-    -   **Exact match first** (with Khmer Unicode normalization)
-    -   If no exact match → **semantic similarity**
--   Keyword highlighting in snippet results
+### **3. Editable OCR Text Panel**
+- Side-by-side layout: left = PDF preview, right = OCR text  
+- Users can correct OCR mistakes manually  
+- Updated text can be re-indexed instantly
 
-### ✔ Document Indexing
+### **4. Semantic Search Engine**
+- Uses Sentence-Transformers embeddings  
+- FAISS CPU index for fast similarity search  
+- Supports Khmer and English queries  
+- Highlights exact text matches  
+- Returns both semantic matches and literal keyword matches
 
--   Uses `distiluse-base-multilingual-cased-v2` (Sentence Transformers)
--   Stores indexed documents in `database/docs.json`
--   Automatically updates documents (no duplicates)
+### **5. PDF Management**
+- Upload new PDFs  
+- Automatically OCR + index on upload  
+- Open existing documents  
+- Re-index after manual edits  
+- Clean detection of missing/removed PDF files
 
-### ✔ Clean Modern UI
+---
 
--   Two tabs: **Upload & Index** and **Search**
--   Blue buttons inspired by Streamlit theme
--   Search results displayed in attractive cards
+## 🛠 Tech Stack
 
-## 📂 Project Structure
+| Component | Library |
+|----------|---------|
+| UI | Streamlit |
+| OCR | Pytesseract + Tesseract-OCR |
+| PDF Rendering | pdfplumber + Pillow |
+| Embeddings | Sentence-Transformers |
+| Vector Index | FAISS CPU |
+| Storage | JSON-based local index |
 
-    khmer_pdf_search/
-    │
-    ├── app.py
-    ├── search_engine.py
-    ├── extract_text.py
-    ├── database/
-    │   └── docs.json
-    ├── pdf_storage/
-    └── README.md
+---
 
-## 🛠 Installation
+## 📁 Project Structure
 
-### Install dependencies
+```
+khmer-pdf-search-system/
+│
+├── app.py                 # Main Streamlit UI
+├── extract_text.py        # OCR pipeline (with fallback)
+├── search_engine.py       # Embedding + search engine
+├── requirements.txt       # Python dependencies
+├── packages.txt           # System dependencies (Tesseract)
+├── pdf_storage/           # Uploaded PDF files
+└── docs.json              # Indexed text + embeddings
+```
 
-    pip install streamlit pdfplumber sentence-transformers
+---
 
-Optional OCR support:
+## 📦 Installation (Local)
 
-    pip install pytesseract pillow
+### 1. Clone the repo
+```bash
+git clone https://github.com/<your-username>/khmer-pdf-search-system.git
+cd khmer-pdf-search-system
+```
 
-### Run the app
+### 2. Install Python dependencies
+```bash
+pip install -r requirements.txt
+```
 
-    streamlit run app.py
+### 3. Install Tesseract-OCR
 
-## 🚀 How to Use
+**macOS**
+```bash
+brew install tesseract
+brew install tesseract-lang
+```
 
-### Upload & Index
+**Ubuntu**
+```bash
+sudo apt install tesseract-ocr tesseract-ocr-khm
+```
 
-1.  Upload a PDF\
-2.  Extracted text appears\
-3.  Edit the text as needed\
-4.  Click **Save & index this document**
+### 4. Run the app
+```bash
+streamlit run app.py
+```
 
-### Search
+---
 
-1.  Enter keyword\
-2.  Click **Search**\
-3.  Exact match → if none → semantic search\
-4.  Results show filename, snippet, score, and action buttons
+## 🌐 Deployment
 
-## 🔍 Search Logic
+### **Streamlit Cloud**
+Requires:
+- `requirements.txt` (Python deps)
+- `packages.txt` (system deps)
 
-### Exact Match
+Your `packages.txt` should contain:
 
--   Unicode normalization\
--   Zero-width character cleanup\
--   Matches keyword anywhere in text
+```
+tesseract-ocr
+tesseract-ocr-khm
+```
 
-### Semantic Search
+### **Hugging Face Spaces (Recommended)**
+Supports:
+- Streamlit app
+- `requirements.txt`
+- `apt.txt` equivalent (same as packages.txt)
 
--   Uses multilingual embeddings\
--   Ranked by cosine similarity
+---
 
-## ⚠️ Limitations
+## 🧪 How It Works
 
--   OCR quality affects accuracy\
--   PDF may contain inconsistent Khmer character encoding\
--   Browsers restrict embedded PDF viewer
+### 1. **User uploads PDF**
+- File saved to `/pdf_storage`
+- OCR runs on each page
+- Extracted text is indexed immediately
 
-## 💡 Future Improvements
+### 2. **User edits OCR text**
+- Updates are saved
+- Re-indexed using Sentence-Transformer embeddings
 
--   Stronger Khmer OCR\
--   Better inline PDF viewer\
--   Topic classification\
--   API backend
+### 3. **Search**
+- Query is embedded
+- FAISS finds similar documents
+- Exact keyword matches are highlighted
 
-## 👨‍🏫 Suitable For
+---
 
--   University NLP projects\
--   Khmer-language AI research\
--   Enterprise internal search systems
+## 📸 Screenshots
+(Add screenshots here later)
+
+---
+
+## 👨‍💻 Author
+**Ravy Lim**  
+Master of Science in AI, AUPP  
+GitHub: https://github.com/limravydev
+
+---
+
+## 📄 License
+This project is for educational and academic use under AUPP’s NLP course.  
+You may use or extend it with attribution.
