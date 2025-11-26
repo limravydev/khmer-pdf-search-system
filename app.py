@@ -1,494 +1,328 @@
-# app.py
 import os
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-
-import os
+import time
 import re
-import unicodedata
-import io
 import base64
+from io import BytesIO
 
 import streamlit as st
-import pdfplumber  # for PDF page preview as image
-from PIL import Image
-
-# from extract_text import extract_text_from_pdf
-# from search_engine import (
-#     add_document,
-#     search,
-#     clean_missing_files,
-#     get_index_stats,
-#     get_document_text,
-# )
+from pdf2image import convert_from_path
+from utils import PDF_SCROLL_CSS, pages_to_html
 
 from extract_text import extract_text_from_pdf
-from search_engine import add_document, search
+from search_engine import (
+    add_document,
+    search,
+    clean_missing_files,
+    get_index_stats,
+    get_document_text,
+)
 
-# --------------------------------------------------------
-# Page config
-# --------------------------------------------------------
-st.set_page_config("Khmer PDF Search System", layout="wide")
+# -------------------------------------------------------------------
+# Basic config
+# -------------------------------------------------------------------
+PDF_DIR = "pdf_storage"
+os.makedirs(PDF_DIR, exist_ok=True)
 
-# --------------------------------------------------------
-# Global CSS (tabs + buttons + cards + layout)
-# --------------------------------------------------------
+st.set_page_config(
+    page_title="Khmer PDF Keyword Search System",
+    layout="wide",
+)
+
+st.title("Khmer PDF Keyword Search System")
+
+# Global CSS
 st.markdown(
     """
-    <style>
-    body {
-        background-color: #fafafa;
-    }
-    /* Tabs styling */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 4px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        padding: 8px 18px;
-        border-radius: 12px 12px 0 0;
-        background-color: #f5f5f5;
-        font-weight: 500;
-    }
-    .stTabs [data-baseweb="tab"][aria-selected="true"] {
-        background-color: #ffffff;
-        border-bottom: 3px solid #ff4b4b;
-    }
-
-    /* Buttons (primary style) */
-    .stButton > button, .stDownloadButton > button {
-        background-color: #0d6efd;
-        color: white;
-        border-radius: 999px;
-        border: none;
-        padding: 0.45rem 1.2rem;
-        font-size: 0.9rem;
-    }
-    .stButton > button:hover, .stDownloadButton > button:hover {
-        background-color: #0b5ed7;
-        color: white;
-    }
-
-    /* Result card */
-    .result-card {
-        border-radius: 12px;
-        padding: 16px 20px;
-        margin-bottom: 16px;
-        border: 1px solid #ececec;
-        background-color: #fafafa;
-    }
-
-    /* File list row */
-    .file-row {
-        padding: 6px 0;
-        border-bottom: 1px solid #f0f0f0;
-    }
-    .file-row span.filename {
-        font-size: 14px;
-    }
-    .file-row span.badge-current {
-        display: inline-block;
-        margin-left: 6px;
-        padding: 2px 8px;
-        font-size: 11px;
-        border-radius: 999px;
-        background-color: #e0f2fe;
-        color: #0369a1;
-    }
-    </style>
-    """,
+<style>
+.pdf-scroll {
+    max-height: 800px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    border: 1px solid #e5e5e5;
+    padding: 8px;
+    border-radius: 6px;
+    background-color: #fafafa;
+}
+.pdf-scroll img {
+    max-width: 100% !important;
+    height: auto !important;
+    display: block;
+}
+</style>
+""",
     unsafe_allow_html=True,
 )
 
-# --------------------------------------------------------
-# Session state
-# --------------------------------------------------------
-defaults = {
-    "current_text": "",
-    "current_filename": None,
-    "current_pdf_path": None,
-    "search_results": [],
-    "search_query": "",
-}
-for key, value in defaults.items():
-    if key not in st.session_state:
-        st.session_state[key] = value
+# Clean index from missing PDF files once at start
+clean_missing_files(pdf_dir=PDF_DIR)
 
 
-# --------------------------------------------------------
+# -------------------------------------------------------------------
 # Helper functions
-# --------------------------------------------------------
-def normalize_khmer(text: str) -> str:
-    """Normalize Khmer text to improve matching."""
-    if not text:
-        return ""
-    text = unicodedata.normalize("NFC", text)
-    text = re.sub(r"[\u200b\u200c\u200d]", "", text)
-    return text
+# -------------------------------------------------------------------
+
+def list_pdfs() -> list:
+    try:
+        return sorted(
+            [f for f in os.listdir(PDF_DIR) if f.lower().endswith(".pdf")]
+        )
+    except FileNotFoundError:
+        return []
 
 
-def make_snippet(text: str, query: str, window: int = 180) -> str:
-    """Return a short snippet around the first match of query."""
-    if not text:
-        return ""
-    if not query.strip():
-        return text[: window * 2]
-
-    idx = text.find(query)
-    if idx == -1:
-        return text[: window * 2]
-
-    start = max(0, idx - window)
-    end = min(len(text), idx + window)
-    return text[start:end]
-
-
-def highlight(text: str, query: str) -> str:
-    """Highlight query inside text using simple HTML span."""
-    if not query.strip():
+def highlight_keyword(text: str, query: str) -> str:
+    """
+    Highlight query inside text with a yellow background.
+    Case-insensitive for ASCII letters; exact substring for Khmer.
+    """
+    if not text or not query:
         return text
 
-    pattern = re.escape(query)
+    escaped = re.escape(query)
+    pattern = re.compile(escaped, flags=re.IGNORECASE)
 
-    def repl(m):
-        return f"<span style='background-color:#fff3bf'>{m.group(0)}</span>"
+    def repl(m: re.Match) -> str:
+        s = m.group(0)
+        return (
+            f"<span style='background-color:#fff3b0;"
+            f" padding:0 2px; border-radius:2px;'>{s}</span>"
+        )
 
-    return re.sub(pattern, repl, text)
+    highlighted = pattern.sub(repl, text)
+    highlighted = highlighted.replace("\n", "<br>")
+    return highlighted
 
 
-# --------------------------------------------------------
-# Clean index + compute stats
-# --------------------------------------------------------
-# clean_missing_files()
+@st.cache_resource
+def load_pdf_pages(path: str):
+    """Convert PDF to list of PIL images (one per page)."""
+    try:
+        pages = convert_from_path(path, dpi=130)
+        return pages
+    except Exception:
+        return []
 
-# Count PDFs in folder
-if os.path.exists("pdf_storage"):
-    pdf_files = [
-        f for f in os.listdir("pdf_storage")
-        if f.lower().endswith(".pdf")
-    ]
-else:
-    pdf_files = []
+# -------------------------------------------------------------------
+# Sidebar: index stats
+# -------------------------------------------------------------------
 
-# stats = get_index_stats(pdf_dir="pdf_storage")
+with st.sidebar:
+    st.header("Index status")
 
-# --------------------------------------------------------
-# Title + Stats bar + Tabs
-# --------------------------------------------------------
-st.title("Khmer PDF Search System")
-st.caption("Upload Khmer PDFs, run OCR, and search them by keyword (Khmer or English).")
+    stats = get_index_stats(pdf_dir=PDF_DIR)
+    st.metric("Indexed PDFs", stats.get("indexed_docs", 0))
 
-with st.container():
-    col_a, col_b, col_c = st.columns(3)
-    col_a.metric("Uploaded PDFs", len(pdf_files))
-    # col_b.metric("Indexed documents", stats["indexed_docs"])
-    # col_c.metric("Orphan docs", stats["orphan_docs"])
+    orphan_docs = stats.get("orphan_docs", []) or []
+    if orphan_docs:
+        st.warning(
+            f"{len(orphan_docs)} indexed file(s) are missing in the "
+            f"`{PDF_DIR}` folder."
+        )
+        if st.button("Clean missing files now"):
+            clean_missing_files(pdf_dir=PDF_DIR)
+            st.experimental_rerun()
 
-st.markdown("---")
+    st.divider()
+    st.caption(f"PDFs are stored in `{PDF_DIR}/`")
 
-tab_upload, tab_search = st.tabs(["📄 Upload & Index", "🔍 Search"])
 
-# ========================================================
-# TAB 1: Upload & Index
-# ========================================================
+# -------------------------------------------------------------------
+# Tabs
+# -------------------------------------------------------------------
+
+tab_upload, tab_search = st.tabs(["📥 Upload & Index", "🔍 Search"])
+
+
+# -------------------------------------------------------------------
+# Tab 1: Upload & Index
+# -------------------------------------------------------------------
 with tab_upload:
-    st.markdown("### Step 1 · Upload PDF")
-    st.write(
-        "Upload a Khmer PDF. The app will run OCR, extract text, and index it "
-        "so it becomes searchable immediately."
-    )
+    st.subheader("1. Upload PDF and extract text with OCR")
 
-    uploaded = st.file_uploader(
-        "Drag and drop or browse a PDF file",
-        type="pdf",
-        key="uploader",
-    )
+    uploaded = st.file_uploader("Upload a PDF file", type=["pdf"], key="uploader")
 
     if uploaded is not None:
-        os.makedirs("pdf_storage", exist_ok=True)
-
-        pdf_path = os.path.join("pdf_storage", uploaded.name)
+        # Save PDF into pdf_storage
+        pdf_path = os.path.join(PDF_DIR, uploaded.name)
         with open(pdf_path, "wb") as f:
             f.write(uploaded.getbuffer())
+        st.success(f"Saved PDF to `{pdf_path}`")
 
-        # Show spinner while OCR + indexing run
-        with st.spinner("Running OCR and indexing this PDF..."):
-            text = extract_text_from_pdf(pdf_path) or ""
+        # Remember current PDF path + filename in session
+        st.session_state.current_pdf_path = pdf_path
+        st.session_state.current_filename = uploaded.name
 
-            # Save to session for editor
-            st.session_state.current_filename = uploaded.name
-            st.session_state.current_pdf_path = pdf_path
-            st.session_state.current_text = text
+        col_a, _ = st.columns([1, 4])
+        with col_a:
+            if st.button("Run OCR and preview text", type="primary", key="btn_ocr"):
+                with st.spinner("Extracting text from PDF using OCR..."):
+                    text = extract_text_from_pdf(pdf_path) or ""
 
-            # Immediately index so it is searchable
-            if text.strip():
-                add_document(uploaded.name, text)
+                st.session_state.current_text = text
 
-        st.success(
-            "PDF uploaded and indexed. You can review and edit the text below, "
-            "then click **Save & index this document** again to update the index."
-        )
+    # Show preview + extracted text side by side if we have them
+    if (
+        "current_pdf_path" in st.session_state
+        and st.session_state.get("current_pdf_path")
+        and st.session_state.get("current_text")
+    ):
+        col_left, col_right = st.columns(2)
 
-    # ---------- Current PDF editor ----------
-    if st.session_state.current_pdf_path:
-        st.markdown("### Step 2 · Review and edit extracted text")
+        # Left: PDF preview (scrollable vertical with all pages)
+        with col_left:
+            st.subheader("Original PDF (preview)")
+            pdf_path_preview = st.session_state.current_pdf_path
+            pages = load_pdf_pages(pdf_path_preview) if pdf_path_preview else []
 
-        st.info(
-            f"Currently loaded file: **{st.session_state.current_filename}**"
-        )
+            if pages:
+                html_images = pages_to_html(pages)
+                st.markdown(
+                    f"<div class='pdf-scroll'>{html_images}</div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.info("Cannot preview this PDF (conversion failed).")
 
-        col1, col2 = st.columns(2)
+        # Right: Extracted text & index button
+        with col_right:
+            st.subheader("Extracted text (this PDF)")
+            text_value = st.session_state.current_text
 
-        # Left: PDF preview as image + download
-        with col1:
-            st.markdown("#### Original PDF (preview)")
-
-            if st.session_state.current_pdf_path:
-                try:
-                    # Open PDF and render selected page as an image
-                    with pdfplumber.open(st.session_state.current_pdf_path) as pdf:
-                        num_pages = len(pdf.pages)
-
-                        if num_pages > 1:
-                            page_num = st.slider(
-                                "Page",
-                                min_value=1,
-                                max_value=num_pages,
-                                value=1,
-                                key="pdf_preview_page",
-                            )
-                        else:
-                            page_num = 1
-
-                        page = pdf.pages[page_num - 1]
-                        pil_img = page.to_image(resolution=150).original
-
-                    # Convert PIL image to PNG bytes
-                    buf = io.BytesIO()
-                    pil_img.save(buf, format="PNG")
-                    img_bytes = buf.getvalue()
-                    img_b64 = base64.b64encode(img_bytes).decode()
-
-                    # Scrollable & bordered container with the image
-                    pdf_html = f"""
-                    <div style="
-                        border: 1px solid #ddd;
-                        border-radius: 12px;
-                        padding: 8px;
-                        height: 700px;
-                        overflow-y: auto;
-                        background-color: #ffffff;
-                    ">
-                        <img src="data:image/png;base64,{img_b64}" style="width:100%; display:block;" />
-                    </div>
-                    """
-
-                    st.markdown(pdf_html, unsafe_allow_html=True)
-                    st.caption(f"Page {page_num} of {num_pages}")
-
-                    # Download button under preview
-                    with open(st.session_state.current_pdf_path, "rb") as f:
-                        pdf_bytes = f.read()
-                    st.download_button(
-                        label="Download PDF",
-                        data=pdf_bytes,
-                        file_name=st.session_state.current_filename,
-                        mime="application/pdf",
-                    )
-                except Exception as e:
-                    st.error(f"Cannot preview PDF: {e}")
-
-        # Right: text editor + save
-        with col2:
-            st.markdown("#### Extracted text (OCR result)")
-            st.write("You can correct OCR errors here before indexing.")
-
-            st.session_state.current_text = st.text_area(
-                "Extracted / OCR text",
-                value=st.session_state.current_text,
-                height=700,
+            edited_text = st.text_area(
+                "Extracted OCR text (you can correct it before indexing)",
+                text_value,
+                height=600,
+                label_visibility="collapsed",
             )
+            st.session_state.current_text = edited_text
 
-            if st.button("Save & index this document"):
-                if st.session_state.current_text.strip():
-                    with st.spinner("Updating index for this document..."):
+            col_i, _ = st.columns([1, 4])
+            with col_i:
+                if st.button(
+                    "Save & index this document",
+                    type="primary",
+                    key="btn_index",
+                ):
+                    with st.spinner(
+                        "Indexing pages for keyword search (page-level)..."
+                    ):
                         add_document(
                             st.session_state.current_filename,
                             st.session_state.current_text,
                         )
-                    st.success("Text updated and re-indexed.")
-                else:
-                    st.warning("Text is empty. Please check OCR result before saving.")
+                    st.success("Document indexed successfully ✅")
 
-    # ---------- List all uploaded PDFs ----------
-    st.markdown("---")
-    st.markdown("### Step 3 · Manage uploaded PDFs")
+    st.divider()
+    st.subheader("2. Indexed PDFs")
 
-    if not os.path.exists("pdf_storage"):
-        st.info("No PDFs uploaded yet.")
+    indexed_files = stats.get("indexed_filenames", []) or []
+
+    if not indexed_files:
+        st.info("No PDFs indexed yet. Upload, extract, and index a PDF above.")
     else:
-        files = [
-            f for f in os.listdir("pdf_storage")
-            if f.lower().endswith(".pdf")
-        ]
-        if not files:
-            st.info("No PDFs uploaded yet.")
-        else:
-            for fname in sorted(files):
-                col_a, col_b = st.columns([5, 1])
-                with col_a:
-                    is_current = (
-                        st.session_state.current_filename == fname
-                    )
-                    badge_html = (
-                        "<span class='badge-current'>Currently open</span>"
-                        if is_current
-                        else ""
-                    )
-                    st.markdown(
-                        f"<div class='file-row'>"
-                        f"<span class='filename'>📄 {fname}</span> {badge_html}"
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
-                with col_b:
-                    if st.button(
-                        "Open", key=f"open_{fname}", disabled=is_current
-                    ):
-                        path = os.path.join("pdf_storage", fname)
+        for fname in indexed_files:
+            col1, col2, col3 = st.columns([4, 1.2, 1.5])
+            with col1:
+                st.write(f"📄 {fname}")
+            with col2:
+                if st.button("View text", key=f"view_{fname}"):
+                    full_text = get_document_text(fname)
+                    with st.expander(f"Full text of {fname}", expanded=False):
+                        st.write(full_text or "(No text in index)")
 
-                        # 1) Try to get text from index (fast)
-                        text = get_document_text(fname)
-
-                        # 2) Fallback OCR only if not indexed
-                        if not text:
-                            with st.spinner("Running OCR for this PDF..."):
-                                text = extract_text_from_pdf(path) or ""
-                                if text.strip():
-                                    add_document(fname, text)
-
-                        st.session_state.current_filename = fname
-                        st.session_state.current_pdf_path = path
-                        st.session_state.current_text = text
-
-# ========================================================
-# TAB 2: Search
-# ========================================================
-with tab_search:
-    st.markdown("### Search indexed documents")
-    st.write(
-        "Type a keyword in Khmer or English. The system will search all indexed PDFs "
-        "by meaning, and highlight matches when the exact text appears."
-    )
-
-    query = st.text_input(
-        "Search by keyword",
-        value=st.session_state.search_query,
-        key="search_input",
-        placeholder="e.g. ឥណទាន, loan policy, interest rate…",
-    )
-
-    col_search_btn, col_clear_btn = st.columns([1, 1])
-    with col_search_btn:
-        if st.button("Search", key="search_button"):
-            st.session_state.search_query = query
-            if query.strip():
-                with st.spinner("Searching indexed documents..."):
-                    raw_results = search(query)
-                    q_norm = normalize_khmer(query)
-                    exact = [
-                        r for r in raw_results
-                        if q_norm in normalize_khmer(r["text"])
-                    ]
-                    st.session_state.search_results = exact if exact else raw_results
-            else:
-                st.session_state.search_results = []
-    with col_clear_btn:
-        if st.button("Clear"):
-            st.session_state.search_query = ""
-            st.session_state.search_results = []
-            query = ""
-
-    results = st.session_state.search_results
-    q = st.session_state.search_query
-
-    st.markdown("---")
-
-    if results:
-        st.markdown("#### Results")
-        q_norm = normalize_khmer(q)
-        has_exact = any(q_norm in normalize_khmer(r["text"]) for r in results)
-        if has_exact:
-            st.caption(
-                "Showing documents that contain the keyword text, ranked by semantic similarity."
-            )
-        else:
-            st.caption(
-                "No clean exact match detected. Showing most semantically similar documents."
-            )
-
-        for r in results:
-            snippet_raw = make_snippet(r["text"], q)
-            snippet_html = highlight(snippet_raw, q)
-
-            st.markdown(
-                f"""
-                <div class="result-card">
-                    <div style="font-weight:600;font-size:15px;margin-bottom:4px;">
-                        📄 {r['filename']}
-                    </div>
-                    <div style="font-size:12px;color:#999;">
-                        Score: {r['score']:.3f}
-                    </div>
-                    <div style="margin-top:10px;font-size:14px;line-height:1.6;">
-                        {snippet_html}…
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-            pdf_path = os.path.join("pdf_storage", r["filename"])
-
-            # Buttons row
-            cols_btn = st.columns([1, 1, 5])
-            with cols_btn[0]:
+            with col3:
+                pdf_path = os.path.join(PDF_DIR, fname)
                 if os.path.exists(pdf_path):
                     with open(pdf_path, "rb") as f:
                         pdf_bytes = f.read()
                     st.download_button(
                         "Download PDF",
                         data=pdf_bytes,
-                        file_name=r["filename"],
+                        file_name=fname,
                         mime="application/pdf",
-                        key=f"dl_{r['filename']}",
+                        key=f"dl_{fname}",
                     )
-                else:
-                    st.caption("PDF not found.")
 
-            with cols_btn[1]:
-                if os.path.exists(pdf_path):
-                    if st.button(
-                        "Open in editor", key="open_editor_" + r["filename"]
-                    ):
-                        # 1) Try to read from index
-                        text = get_document_text(r["filename"])
 
-                        # 2) Fallback OCR only if needed
-                        if not text:
-                            with st.spinner("Running OCR for this PDF..."):
-                                text = extract_text_from_pdf(pdf_path) or ""
-                                if text.strip():
-                                    add_document(r["filename"], text)
+# -------------------------------------------------------------------
+# Tab 2: Search
+# -------------------------------------------------------------------
+with tab_search:
+    st.subheader("Search in indexed PDFs (exact keyword, page-level)")
 
-                        st.session_state.current_filename = r["filename"]
-                        st.session_state.current_pdf_path = pdf_path
-                        st.session_state.current_text = text
-                        st.info(
-                            "Switched document. Go to the **Upload & Index** tab to review it."
-                        )
-                else:
-                    st.caption("Missing file.")
+    query = st.text_input("Keyword to search", key="query_input")
 
-    elif q.strip():
-        st.info("No matching documents found.")
+    # Results per search
+    k = st.slider("Max results", min_value=5, max_value=50, value=20, step=5)
+
+    col_search_btn, _ = st.columns([1, 5])
+    with col_search_btn:
+        do_search = st.button("Search", type="primary", key="btn_search")
+
+    if do_search:
+        if not query.strip():
+            st.warning("Please enter a keyword to search.")
+        else:
+            with st.spinner("Searching pages..."):
+                t0 = time.time()
+                results = search(query, k=k)
+                elapsed = time.time() - t0
+
+            st.caption(f"Search time (backend): {elapsed:.3f} seconds")
+
+            if not results:
+                st.info("No pages matched your keyword.")
+            else:
+                st.write(f"Found **{len(results)}** matching page(s).")
+                st.divider()
+
+                for r in results:
+                    filename = r.get("filename", "")
+                    page = r.get("page", None)
+                    title = filename
+                    if page is not None:
+                        title = f"{filename} — Page {page}"
+
+                    # Header row with title and a small "Download PDF" button
+                    row1_col1, row1_col2 = st.columns([4, 1.5])
+
+                    with row1_col1:
+                        st.markdown(f"### 📄 {title}")
+                    with row1_col2:
+                        pdf_path = os.path.join(PDF_DIR, filename)
+                        if os.path.exists(pdf_path):
+                            with open(pdf_path, "rb") as f:
+                                pdf_bytes = f.read()
+                            st.download_button(
+                                "Download PDF",
+                                data=pdf_bytes,
+                                file_name=filename,
+                                mime="application/pdf",
+                                key=f"dl_search_{filename}_{page}",
+                            )
+
+                    st.caption(f"Relevance score: {r['score']:.3f}")
+
+                    text = r.get("text", "") or ""
+                    # Make snippet around first match
+                    lower = text.lower()
+                    q_lower = query.lower()
+                    pos = lower.find(q_lower)
+                    if pos == -1:
+                        # fallback: just take the first 600 chars
+                        snippet = text[:600]
+                    else:
+                        start = max(0, pos - 80)
+                        end = min(len(text), pos + len(query) + 320)
+                        snippet = text[start:end]
+
+                    # Highlight in snippet
+                    snippet_marked = highlight_keyword(snippet, query)
+                    st.markdown(snippet_marked, unsafe_allow_html=True)
+
+                    # Full page text with highlight
+                    full_marked = highlight_keyword(text, query)
+                    with st.expander("Show full page text"):
+                        st.markdown(full_marked, unsafe_allow_html=True)
+
+                    st.markdown("---")

@@ -1,121 +1,134 @@
 # search_engine.py
 import os
 import json
-from typing import List, Dict, Any, Optional
-
-import numpy as np
-import streamlit as st
-from sentence_transformers import SentenceTransformer
+import re
+from typing import List, Dict, Any
 
 # -------------------------------------------------------------------
 # Config
 # -------------------------------------------------------------------
 DB_DIR = "database"
 DB_PATH = os.path.join(DB_DIR, "docs.json")
-
 os.makedirs(DB_DIR, exist_ok=True)
 
-# Use a multilingual model (you already chose this)
-# MODEL_NAME = "sentence-transformers/distiluse-base-multilingual-cased-v2"
-MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-
-
-# -------------------------------------------------------------------
-# Model caching (Step 1)
-# -------------------------------------------------------------------
-
-@st.cache_resource
-def get_model() -> SentenceTransformer:
-    """
-    Load the SentenceTransformer model once and reuse it.
-    Streamlit will keep this in memory between reruns.
-    """
-    return SentenceTransformer(MODEL_NAME)
-
-
-# -------------------------------------------------------------------
-# In-memory storage
-# -------------------------------------------------------------------
+# In-memory index
+# One item = one page:
+# {
+#   "filename": "file.pdf",
+#   "page": 3,
+#   "text": "...",        # original text
+#   "text_lower": "...",  # cached lowercase version
+# }
 docs: List[Dict[str, Any]] = []
-emb_matrix: Optional[np.ndarray] = None  # shape (N, D)
 
 
 # -------------------------------------------------------------------
-# Internal helpers
+# Page splitting
 # -------------------------------------------------------------------
 
-def _normalize(vec: np.ndarray) -> np.ndarray:
-    """L2-normalize a 1D or 2D vector."""
-    if vec.ndim == 1:
-        norm = np.linalg.norm(vec)
-        return vec / norm if norm > 0 else vec
-    elif vec.ndim == 2:
-        norms = np.linalg.norm(vec, axis=1, keepdims=True)
-        norms[norms == 0] = 1.0
-        return vec / norms
-    return vec
+# Matches headers like: [PAGE 1/5 – OCR angle=0°]
+PAGE_PATTERN = re.compile(
+    r"\[PAGE\s+(\d+)/(\d+)\s+–\s+OCR angle=(-?\d+)°\]\n"
+)
 
+
+def _split_into_pages(text: str) -> List[Dict[str, Any]]:
+    """
+    Split big OCR text (with [PAGE ...] headers) into page chunks.
+
+    Returns:
+        [
+            {"page": 1, "text": "..."},
+            {"page": 2, "text": "..."},
+            ...
+        ]
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+
+    # If no PAGE markers, treat as single page
+    if "[PAGE" not in text:
+        return [{"page": 1, "text": text}]
+
+    matches = list(PAGE_PATTERN.finditer(text))
+    if not matches:
+        return [{"page": 1, "text": text}]
+
+    pages: List[Dict[str, Any]] = []
+    for i, m in enumerate(matches):
+        page_num = int(m.group(1))
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        page_text = text[start:end].strip()
+        if page_text:
+            pages.append({"page": page_num, "text": page_text})
+
+    if not pages:
+        pages.append({"page": 1, "text": text})
+
+    return pages
+
+
+# -------------------------------------------------------------------
+# DB load / save
+# -------------------------------------------------------------------
 
 def _load_db() -> None:
-    """Load documents from disk into the global docs list."""
-    global docs, emb_matrix
+    """Load docs from disk into memory, normalize structure."""
+    global docs
+
     if not os.path.exists(DB_PATH):
         docs = []
-        emb_matrix = None
         return
 
     try:
         with open(DB_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
-        if isinstance(data, list):
-            docs = data
-        elif isinstance(data, dict) and isinstance(data.get("documents"), list):
-            # allow old format: {"documents": [...]}
-            docs = data["documents"]
-        else:
-            docs = []
     except Exception:
         docs = []
+        return
 
-    _rebuild_emb_matrix()
+    normalized: List[Dict[str, Any]] = []
+
+    if isinstance(data, list):
+        source = data
+    elif isinstance(data, dict) and isinstance(data.get("documents"), list):
+        source = data["documents"]
+    else:
+        source = []
+
+    for d in source:
+        if not isinstance(d, dict):
+            continue
+        filename = d.get("filename", "")
+        page = d.get("page")
+        text = d.get("text", "") or ""
+        # some old entries might have 'embedding' we ignore now
+
+        text_lower = d.get("text_lower")
+        if text_lower is None:
+            text_lower = text.lower()
+
+        normalized.append(
+            {
+                "filename": filename,
+                "page": page,
+                "text": text,
+                "text_lower": text_lower,
+            }
+        )
+
+    docs = normalized
 
 
 def _save_db() -> None:
-    """Persist docs to disk."""
+    """Save docs back to JSON."""
     with open(DB_PATH, "w", encoding="utf-8") as f:
         json.dump(docs, f, ensure_ascii=False, indent=2)
 
 
-def _rebuild_emb_matrix() -> None:
-    """
-    Rebuild the embedding matrix from docs.
-
-    Step 2: We DO NOT recompute embeddings here.
-    We only read the 'embedding' list already stored in each document.
-    """
-    global emb_matrix
-
-    if not docs:
-        emb_matrix = None
-        return
-
-    embs = []
-    for d in docs:
-        emb_list = d.get("embedding")
-        if not emb_list:
-            continue
-        emb = np.asarray(emb_list, dtype="float32")
-        emb = _normalize(emb)
-        embs.append(emb)
-
-    if not embs:
-        emb_matrix = None
-        return
-
-    emb_matrix = np.stack(embs, axis=0)  # (N, D)
-
-
-# Load database once at import
+# Load once on import
 _load_db()
 
 
@@ -125,122 +138,126 @@ _load_db()
 
 def add_document(filename: str, text: str) -> None:
     """
-    Add or update a document.
+    Index a document at page level, keyword-only.
 
-    - If filename already exists, its text & embedding are UPDATED (no duplicates).
-    - If it's new, it is appended.
-
-    Step 2: document embedding is computed only here (index time).
+    - Removes any existing pages for this filename
+    - Splits text into pages
+    - Stores:
+        filename, page, text, text_lower
     """
-    global docs, emb_matrix
-
-    if not text or not text.strip():
-        return
+    global docs
 
     filename = os.path.basename(filename)
+    pages = _split_into_pages(text)
+    if not pages:
+        return
 
-    # Compute normalized embedding (using cached model)
-    model = get_model()
-    emb = model.encode([text], show_progress_bar=False)[0]
-    emb = np.asarray(emb, dtype="float32")
-    emb = _normalize(emb)
+    # Remove old entries for this file
+    docs = [d for d in docs if d.get("filename") != filename]
 
-    # Find existing document by filename
-    existing_idx = None
-    for i, d in enumerate(docs):
-        if d["filename"] == filename:
-            existing_idx = i
-            break
+    # Add new pages
+    for p in pages:
+        page_num = p.get("page", 1)
+        page_text = (p.get("text") or "").strip()
+        if not page_text:
+            continue
 
-    if existing_idx is not None:
-        docs[existing_idx]["text"] = text
-        docs[existing_idx]["embedding"] = emb.tolist()
-    else:
         docs.append(
             {
                 "filename": filename,
-                "text": text,
-                "embedding": emb.tolist(),
+                "page": page_num,
+                "text": page_text,
+                "text_lower": page_text.lower(),
             }
         )
 
-    _rebuild_emb_matrix()
     _save_db()
 
 
-def search(query: str, k: int = 5) -> List[Dict[str, Any]]:
+def search(query: str, k: int = 50) -> List[Dict[str, Any]]:
     """
-    Search for the top-k most similar documents for the given query.
+    Exact keyword search (page level), fast.
 
-    Returns a list of document dicts:
-        { "filename": ..., "text": ..., "score": float }
+    - No embeddings
+    - Case-insensitive for ASCII, preserves Khmer
+    - Returns top-k pages where query appears
 
-    Step 2: only the query is embedded here (docs were embedded at index time).
+    Result:
+        {
+            "filename": str,
+            "page": int,
+            "text": str,
+            "score": float  # simple relevance score
+        }
     """
-    if not docs or emb_matrix is None:
+    q = (query or "").strip()
+    if not q:
         return []
 
-    query = (query or "").strip()
-    if not query:
+    if not docs:
         return []
 
-    # Query embedding (using cached model)
-    model = get_model()
-    q_emb = model.encode([query], show_progress_bar=False)[0]
-    q_emb = np.asarray(q_emb, dtype="float32")
-    q_emb = _normalize(q_emb)
-
-    # Cosine similarity = dot product for normalized vectors
-    sims = emb_matrix @ q_emb  # shape (N,)
-
-    # Top-k indices
-    top_k = min(k, len(docs))
-    idxs = np.argsort(-sims)[:top_k]
+    q_lower = q.lower()
 
     results: List[Dict[str, Any]] = []
-    for i in idxs:
-        d = docs[int(i)]
-        item = {
-            "filename": d["filename"],
-            "text": d["text"],
-            "score": float(sims[int(i)]),
-        }
-        results.append(item)
 
-    return results
+    for d in docs:
+        txt = d.get("text", "")
+        txt_lower = d.get("text_lower", "").lower()  # safe
+
+        if q_lower in txt_lower:
+            # simple relevance: earlier position + how many matches
+            pos = txt_lower.find(q_lower)
+            count = txt_lower.count(q_lower)
+            score = 1.0 / (1 + pos) + count * 0.01
+
+            results.append(
+                {
+                    "filename": d.get("filename", ""),
+                    "page": d.get("page", None),
+                    "text": txt,
+                    "score": float(score),
+                }
+            )
+
+    if not results:
+        return []
+
+    results.sort(key=lambda x: x["score"], reverse=True)
+    return results[:k]
 
 
 def clean_missing_files(pdf_dir: str = "pdf_storage") -> None:
     """
-    Remove indexed documents if the corresponding PDF file
-    is missing in the pdf_storage/ folder.
+    Remove pages whose PDF file no longer exists.
     """
-    global docs, emb_matrix
+    global docs
 
     if not docs:
         return
 
-    valid_docs: List[Dict[str, Any]] = []
+    cleaned: List[Dict[str, Any]] = []
     for d in docs:
         fname = d.get("filename")
         if not fname:
             continue
         pdf_path = os.path.join(pdf_dir, fname)
         if os.path.exists(pdf_path):
-            valid_docs.append(d)
+            cleaned.append(d)
 
-    if len(valid_docs) != len(docs):
-        docs = valid_docs
-        _rebuild_emb_matrix()
+    if len(cleaned) != len(docs):
+        docs = cleaned
         _save_db()
 
 
 def get_index_stats(pdf_dir: str = "pdf_storage") -> Dict[str, Any]:
     """
-    Return simple statistics about the index:
-      - indexed_docs: number of docs in index
-      - indexed_filenames: list of filenames in index
-      - orphan_docs: docs in index whose PDF file is missing
+    Return:
+        {
+            "indexed_docs": number of unique PDFs,
+            "indexed_filenames": [...],
+            "orphan_docs": [... filenames with missing PDF]
+        }
     """
     if not docs:
         return {
@@ -249,26 +266,38 @@ def get_index_stats(pdf_dir: str = "pdf_storage") -> Dict[str, Any]:
             "orphan_docs": [],
         }
 
-    indexed_filenames = [d["filename"] for d in docs]
-    missing = []
-    for fname in indexed_filenames:
+    filenames = sorted({d.get("filename", "") for d in docs if d.get("filename")})
+    orphan = []
+    for fname in filenames:
         pdf_path = os.path.join(pdf_dir, fname)
         if not os.path.exists(pdf_path):
-            missing.append(fname)
+            orphan.append(fname)
 
     return {
-        "indexed_docs": len(docs),
-        "indexed_filenames": indexed_filenames,
-        "orphan_docs": missing,
+        "indexed_docs": len(filenames),
+        "indexed_filenames": filenames,
+        "orphan_docs": orphan,
     }
 
 
 def get_document_text(filename: str) -> str:
     """
-    Return the stored text for a document from the index.
-    If not found, returns "".
+    Return full document text by concatenating pages for that filename.
     """
-    for d in docs:
-        if d["filename"] == filename:
-            return d.get("text", "")
-    return ""
+    filename = os.path.basename(filename)
+    pages = [d for d in docs if d.get("filename") == filename]
+    if not pages:
+        return ""
+
+    pages_sorted = sorted(pages, key=lambda d: d.get("page", 0))
+
+    parts = []
+    for d in pages_sorted:
+        page_num = d.get("page")
+        page_text = d.get("text", "")
+        if page_num is not None:
+            parts.append(f"[PAGE {page_num}]\n{page_text}")
+        else:
+            parts.append(page_text)
+
+    return "\n\n".join(parts)
