@@ -3,6 +3,7 @@ import time
 import re
 import base64
 from io import BytesIO
+import datetime as dt
 
 import streamlit as st
 from pdf2image import convert_from_path
@@ -17,6 +18,49 @@ from search_engine import (
     get_document_text,
 )
 
+from style import inject_css, FILE_LIST_CSS,HIDE_STREAMLIT_STYLE
+st.markdown(FILE_LIST_CSS, unsafe_allow_html=True)
+st.markdown(HIDE_STREAMLIT_STYLE, unsafe_allow_html=True)
+
+
+st.markdown("""
+<style>
+/* Reduce spacing between buttons */
+.block-container {
+    padding-top: 1rem;
+}
+
+.small-col > div {
+    padding-right: 0px !important;
+    margin-right: 0px !important;
+}
+
+/* Make View & Download buttons smaller + closer */
+button[kind="secondary"] {
+    padding: 0.35rem 0.75rem !important;
+    margin-right: 0.2rem !important;
+}
+button[kind="primary"] {
+    padding: 0.35rem 0.75rem !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.title("Khmer PDF Keyword Search System")
+st.caption("Upload Khmer documents, run OCR, and search by exact keyword at page level.")
+
+st.markdown("""
+<style>
+.result-card {
+  border:1px solid #E5E7EB;
+  padding:12px 14px;
+  border-radius:10px;
+  margin-bottom:12px;
+  background:#FFFFFF;
+}
+</style>
+""", unsafe_allow_html=True)
+
 # -------------------------------------------------------------------
 # Basic config
 # -------------------------------------------------------------------
@@ -27,8 +71,7 @@ st.set_page_config(
     page_title="Khmer PDF Keyword Search System",
     layout="wide",
 )
-
-st.title("Khmer PDF Keyword Search System")
+inject_css()
 
 # Global CSS
 st.markdown(
@@ -101,6 +144,20 @@ def load_pdf_pages(path: str):
         return pages
     except Exception:
         return []
+    
+    
+@st.dialog("Full text")
+def show_full_text_dialog(fname: str):
+    from search_engine import get_document_text
+
+    full_text = get_document_text(fname) or "(No text in index)"
+
+    # Read-only text area inside the dialog
+    st.text_area(
+        f"Full text of {fname}",
+        full_text,
+        height=500,
+    )
 
 # -------------------------------------------------------------------
 # Sidebar: index stats
@@ -137,7 +194,7 @@ tab_upload, tab_search = st.tabs(["📥 Upload & Index", "🔍 Search"])
 # Tab 1: Upload & Index
 # -------------------------------------------------------------------
 with tab_upload:
-    st.subheader("1. Upload PDF and extract text with OCR")
+    st.subheader("Upload PDF and extract text with OCR")
 
     uploaded = st.file_uploader("Upload a PDF file", type=["pdf"], key="uploader")
 
@@ -212,52 +269,156 @@ with tab_upload:
                         )
                     st.success("Document indexed successfully ✅")
 
+    # st.divider()
+    # st.subheader("2. Indexed PDFs")
+
+    # indexed_files = stats.get("indexed_filenames", []) or []
+
+    # if not indexed_files:
+    #     st.info("No PDFs indexed yet. Upload, extract, and index a PDF above.")
+    # else:
+    #     for fname in indexed_files:
+    #         col1, col2, col3 = st.columns([4, 1.2, 1.5])
+    #         with col1:
+    #             st.write(f"📄 {fname}")
+    #         with col2:
+    #             if st.button("View text", key=f"view_{fname}"):
+    #                 full_text = get_document_text(fname)
+    #                 with st.expander(f"Full text of {fname}", expanded=False):
+    #                     st.write(full_text or "(No text in index)")
+
+    #         with col3:
+    #             pdf_path = os.path.join(PDF_DIR, fname)
+    #             if os.path.exists(pdf_path):
+    #                 with open(pdf_path, "rb") as f:
+    #                     pdf_bytes = f.read()
+    #                 st.download_button(
+    #                     "Download PDF",
+    #                     data=pdf_bytes,
+    #                     file_name=fname,
+    #                     mime="application/pdf",
+    #                     key=f"dl_{fname}",
+    #                 )
+    
+    
     st.divider()
-    st.subheader("2. Indexed PDFs")
+    st.subheader("PDFs File List")
 
     indexed_files = stats.get("indexed_filenames", []) or []
 
     if not indexed_files:
         st.info("No PDFs indexed yet. Upload, extract, and index a PDF above.")
     else:
-        for fname in indexed_files:
-            col1, col2, col3 = st.columns([4, 1.2, 1.5])
-            with col1:
-                st.write(f"📄 {fname}")
-            with col2:
-                if st.button("View text", key=f"view_{fname}"):
-                    full_text = get_document_text(fname)
-                    with st.expander(f"Full text of {fname}", expanded=False):
-                        st.write(full_text or "(No text in index)")
+        # Header row
+        h1, h2, h3, h4, h5 = st.columns([0.5, 4, 1.2, 2.0, 2.5])
+        with h1:
+            st.markdown(" ")
+        with h2:
+            st.markdown("**File name**")
+        with h3:
+            st.markdown("**Size**")
+        with h4:
+            st.markdown("**Created**")
+        with h5:
+            st.markdown("**Actions**")
 
-            with col3:
-                pdf_path = os.path.join(PDF_DIR, fname)
-                if os.path.exists(pdf_path):
-                    with open(pdf_path, "rb") as f:
-                        pdf_bytes = f.read()
-                    st.download_button(
-                        "Download PDF",
-                        data=pdf_bytes,
-                        file_name=fname,
-                        mime="application/pdf",
-                        key=f"dl_{fname}",
-                    )
+        st.markdown("---")
+
+        for fname in indexed_files:
+            pdf_path = os.path.join(PDF_DIR, fname)
+
+            # Default values
+            size_label = "—"
+            created_label = "—"
+
+            if os.path.exists(pdf_path):
+                # Size in MB
+                size_bytes = os.path.getsize(pdf_path)
+                size_mb = size_bytes / (1024 * 1024)
+                size_label = f"{size_mb:.1f} MB"
+
+                # Created time
+                ctime = os.path.getctime(pdf_path)
+                created_dt = dt.datetime.fromtimestamp(ctime)
+                created_label = created_dt.strftime("%Y-%m-%d %H:%M")
+
+            # One row per file
+            c_icon, c_name, c_size, c_created, c_actions = st.columns(
+                [0.5, 4, 1.2, 2.0, 2.5]
+            )
+
+            with c_icon:
+                st.markdown("📄")
+
+            with c_name:
+                st.markdown(f"**{fname}**")
+
+            with c_size:
+                st.caption(size_label)
+
+            with c_created:
+                st.caption(created_label)
+
+            # with c_actions:
+            #     b1, b2 = st.columns([1, 1])
+
+            #     # View text (same behaviour as before)
+            #     with b1:
+            #         if st.button("View text", key=f"view_{fname}"):
+            #             full_text = get_document_text(fname)
+            #             with st.expander(f"Full text of {fname}", expanded=False):
+            #                 st.write(full_text or "(No text in index)")
+
+            #     # Download PDF (same behaviour as before)
+            #     with b2:
+            #         if os.path.exists(pdf_path):
+            #             with open(pdf_path, "rb") as f:
+            #                 pdf_bytes = f.read()
+            #             st.download_button(
+            #                 "Download",
+            #                 data=pdf_bytes,
+            #                 file_name=fname,
+            #                 mime="application/pdf",
+            #                 key=f"dl_{fname}",
+            #             )
+            with c_actions:
+                b1, b2 = st.columns([1, 1])
+
+                # View text -> open dialog
+                with b1:
+                    if st.button("📄 View text", key=f"view_{fname}"):
+                        show_full_text_dialog(fname)
+
+                # Download (keep as-is)
+                with b2:
+                    if os.path.exists(pdf_path):
+                        with open(pdf_path, "rb") as f:
+                            pdf_bytes = f.read()
+                        st.download_button(
+                            "⬇️ Download",
+                            data=pdf_bytes,
+                            file_name=fname,
+                            mime="application/pdf",
+                            key=f"dl_{fname}",
+                        )
 
 
 # -------------------------------------------------------------------
 # Tab 2: Search
 # -------------------------------------------------------------------
 with tab_search:
+    st.markdown('<div class="result-card">', unsafe_allow_html=True)
     st.subheader("Search in indexed PDFs (exact keyword, page-level)")
 
     query = st.text_input("Keyword to search", key="query_input")
 
     # Results per search
-    k = st.slider("Max results", min_value=5, max_value=50, value=20, step=5)
+    # k = st.slider("Max results", min_value=5, max_value=50, value=20, step=5)
+    k = 100
 
     col_search_btn, _ = st.columns([1, 5])
     with col_search_btn:
-        do_search = st.button("Search", type="primary", key="btn_search")
+        do_search = st.button("🔍 Search", type="primary", key="btn_search")
 
     if do_search:
         if not query.strip():
@@ -294,7 +455,7 @@ with tab_search:
                             with open(pdf_path, "rb") as f:
                                 pdf_bytes = f.read()
                             st.download_button(
-                                "Download PDF",
+                                "⬇️ Download PDF",
                                 data=pdf_bytes,
                                 file_name=filename,
                                 mime="application/pdf",
@@ -326,3 +487,4 @@ with tab_search:
                         st.markdown(full_marked, unsafe_allow_html=True)
 
                     st.markdown("---")
+    st.markdown('</div>', unsafe_allow_html=True)
