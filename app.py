@@ -18,11 +18,14 @@ from search_engine import (
     get_document_text,
 )
 
-from style import inject_css, FILE_LIST_CSS,HIDE_STREAMLIT_STYLE
+from style import inject_css, FILE_LIST_CSS,HIDE_STREAMLIT_STYLE,inject_production_style
 st.markdown(FILE_LIST_CSS, unsafe_allow_html=True)
 st.markdown(HIDE_STREAMLIT_STYLE, unsafe_allow_html=True)
 
-
+import os
+if os.environ.get("STREAMLIT_RUNTIME", "") == "cloud":
+    inject_production_style()
+    
 st.markdown("""
 <style>
 /* Reduce spacing between buttons */

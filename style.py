@@ -1,4 +1,5 @@
 import streamlit as st
+import os
 
 # --------------------------------------------------------
 #  GLOBAL CSS: tabs, PDF preview, buttons, typography
@@ -127,3 +128,15 @@ def inject_css():
     """Inject all global CSS styles into Streamlit."""
     full_css = TAB_CSS + PDF_PREVIEW_CSS + GLOBAL_UI_CSS
     st.markdown(f"<style>{full_css}</style>", unsafe_allow_html=True)
+    
+
+
+def inject_production_style():
+    hide_css = """
+    <style>
+    #MainMenu {visibility: hidden;}
+    header {visibility: hidden;}
+    footer {visibility: hidden;}
+    </style>
+    """
+    st.markdown(hide_css, unsafe_allow_html=True)
