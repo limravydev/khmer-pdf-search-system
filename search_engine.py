@@ -3,6 +3,7 @@ import os
 import json
 import re
 from typing import List, Dict, Any
+from collections import Counter
 
 # -------------------------------------------------------------------
 # Config
@@ -20,6 +21,35 @@ os.makedirs(DB_DIR, exist_ok=True)
 #   "text_lower": "...",  # cached lowercase version
 # }
 docs: List[Dict[str, Any]] = []
+
+
+
+# -------------------------------
+# Stopwords for keyword extraction
+# -------------------------------
+
+# Basic English stopwords
+EN_STOPWORDS = {
+    "the", "and", "or", "of", "to", "in", "for", "on", "a", "an",
+    "is", "are", "was", "were", "this", "that", "it", "as", "at",
+    "by", "with", "from", "be", "has", "have", "had", "you", "we",
+    "they", "i", "my", "our", "your", "their", "but", "so", "if",
+    "then", "than", "also", "too", "very","[PAGE"
+}
+
+# Khmer stopwords (function words, particles, common grammar words)
+KHMER_STOPWORDS = {
+    "ជា", "ដែល", "បាន", "កំពុង", "នឹង", "ក៏", "ហើយ", "និង", "ដែរ",
+    "នៅ", "ក្នុង", "ដោយ", "ពី", "ទៅ", "តាម", "លើ", "ក្រោម", "ចំពោះ",
+    "ជា​មួយ", "ជាមួយ", "សម្រាប់", "រយៈ", "ពេល", "អំឡុង", "ក្រោយ", "មុន",
+    "នោះ", "នេះ", "នាយ", "ន័យ", "នៃ", "របស់", "អស់", "ទាំង", "ទាំងអស់",
+    "គ្រប់", "មួយ", "ពីរ", "បី", "ច្រើន", "តិច", "ខ្លះ", "ខ្លះៗ",
+    "ប៉ុន្តែ", "តែ", "ទោះបីជា", "ទោះបី", "ដូចជា", "ដូចជា​ក៏", "ដូច្នេះ",
+    "ហេតុអ្វី", "ព្រោះ", "ដោយ​សារ", "ដោយសារ", "សារៈ", "គឺ", "គឺជា",
+    "លើកលែងតែ", "ចំពោះ", "ទោះ​យ៉ាងណា", "បើ", "ប្រសិនបី", "បើសិនជា",
+    "អ៊ីចឹង", "បន្ទាប់មក", "បន្ទាប់ពី", "នៅពេលដែល", "ពេលដែល", "ពេល",
+    "ពេលណា", "ពេលខ្លះ", "មែនទេ", "ទេ", "ហើយ​ក៏", "ហើយ​ដែរ",
+}
 
 
 # -------------------------------------------------------------------
@@ -301,3 +331,103 @@ def get_document_text(filename: str) -> str:
             parts.append(page_text)
 
     return "\n\n".join(parts)
+
+
+
+# -------------------------------
+# Keyword extraction (document-level)
+# -------------------------------
+
+def extract_top_keywords(text: str, top_n: int = 10) -> list:
+    """
+    Very simple keyword extractor:
+    - split on whitespace
+    - remove short tokens and pure digits/punct
+    - remove English + Khmer stopwords
+    - keep everything else (including Khmer)
+    - return most frequent tokens
+    """
+    if not text:
+        return []
+
+    # Split into tokens based on whitespace
+    raw_tokens = re.findall(r"\S+", text, flags=re.UNICODE)
+
+    clean_tokens = []
+    for tok in raw_tokens:
+        tok = tok.strip()
+        if len(tok) < 2:
+            continue
+
+        # remove tokens that are only digits or punctuation
+        if re.fullmatch(r"[\d\W_]+", tok, flags=re.UNICODE):
+            continue
+
+        # English stopwords (case-insensitive)
+        if tok.lower() in EN_STOPWORDS:
+            continue
+
+        # Khmer stopwords (exact match)
+        if tok in KHMER_STOPWORDS:
+            continue
+
+        clean_tokens.append(tok)
+
+    if not clean_tokens:
+        return []
+
+    counts = Counter(clean_tokens)
+    top = [w for w, _ in counts.most_common(top_n)]
+    return top
+
+
+def clean_keywords(keywords):
+    cleaned = []
+    for k in keywords:
+        if not k:
+            continue
+
+        # Normalize
+        k = k.strip().lower()
+
+        # Skip words containing "page"
+        if "page" in k:
+            continue
+
+        # Skip bracket-wrapped tokens: [xxx], (xxx), {xxx}
+        if re.match(r"^[\[\(\{].*[\]\)\}]$", k):
+            continue
+
+        # Skip tokens containing any bracket
+        if any(b in k for b in "[]{}()"):
+            continue
+
+        # Skip numbers-only tokens
+        if re.fullmatch(r"[0-9]+", k):
+            continue
+
+        # Skip very short tokens (1 letter)
+        if len(k) <= 1:
+            continue
+
+        cleaned.append(k)
+
+    return cleaned
+
+
+def get_document_keywords(filename: str, top_n: int = 10) -> list:
+    """
+    Compute top keywords for a document using the full indexed text.
+    Does NOT change the index file, computed on the fly.
+    """
+    # 1) Get full text of the document
+    full_text = get_document_text(filename) or ""
+
+    # 2) Extract top keywords from the text
+    raw_keywords = extract_top_keywords(full_text, top_n=top_n)
+
+    # 3) Clean noisy tokens like [PAGE], numbers, etc.
+    cleaned = clean_keywords(raw_keywords)
+
+    # 4) Limit to top_n after cleaning
+    return cleaned[:top_n]

@@ -16,6 +16,7 @@ from search_engine import (
     clean_missing_files,
     get_index_stats,
     get_document_text,
+    get_document_keywords
 )
 
 from style import inject_css, FILE_LIST_CSS,HIDE_STREAMLIT_STYLE,inject_production_style
@@ -63,6 +64,25 @@ st.markdown("""
 }
 </style>
 """, unsafe_allow_html=True)
+
+
+st.markdown(
+    """
+<style>
+.keyword-chip {
+    display: inline-block;
+    background-color: #e0f2fe; /* light blue */
+    color: #0369a1; /* darker blue */
+    padding: 2px 8px;
+    margin: 2px 4px 2px 0;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
 
 # -------------------------------------------------------------------
 # Basic config
@@ -161,6 +181,17 @@ def show_full_text_dialog(fname: str):
         full_text,
         height=500,
     )
+    
+    
+def render_keyword_chips(keywords: list[str]) -> str:
+    """
+    Convert list of keywords into small rounded UI tags.
+    Returns HTML string usable in st.markdown(..., unsafe_allow_html=True).
+    """
+    chips = []
+    for kw in keywords:
+        chips.append(f"<span class='keyword-chip'>{kw}</span>")
+    return " ".join(chips)
 
 # -------------------------------------------------------------------
 # Sidebar: index stats
@@ -355,6 +386,12 @@ with tab_upload:
 
             with c_name:
                 st.markdown(f"**{fname}**")
+                
+                # NEW: document-level keywords
+                keywords = get_document_keywords(fname, top_n=8)
+                if keywords:
+                    chips_html = render_keyword_chips(keywords)
+                    st.markdown(chips_html, unsafe_allow_html=True)
 
             with c_size:
                 st.caption(size_label)
