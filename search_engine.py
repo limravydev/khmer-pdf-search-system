@@ -4,6 +4,7 @@ import json
 import re
 from typing import List, Dict, Any
 from collections import Counter
+import numpy as np
 
 # -------------------------------------------------------------------
 # Config
@@ -415,7 +416,7 @@ def clean_keywords(keywords):
     return cleaned
 
 
-def get_document_keywords(filename: str, top_n: int = 10) -> list:
+def get_document_keywords(filename: str, top_n: int = 5) -> list:
     """
     Compute top keywords for a document using the full indexed text.
     Does NOT change the index file, computed on the fly.
@@ -431,3 +432,55 @@ def get_document_keywords(filename: str, top_n: int = 10) -> list:
 
     # 4) Limit to top_n after cleaning
     return cleaned[:top_n]
+
+
+
+
+
+def get_related_documents(filename: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    """
+    Return top-k most similar PDFs based on keyword overlap (Jaccard similarity).
+
+    Similarity = |keywords_A ∩ keywords_B| / |keywords_A ∪ keywords_B|
+    Uses get_document_keywords() on the fly, so it automatically
+    respects your English & Khmer stopword lists.
+    """
+    filename = os.path.basename(filename)
+
+    # Keywords for the target document
+    target_keywords = set(get_document_keywords(filename, top_n=30))
+    if not target_keywords:
+        return []
+
+    # All unique filenames currently in the index
+    all_filenames = sorted({d.get("filename", "") for d in docs if d.get("filename")})
+
+    results: List[Dict[str, Any]] = []
+
+    for other_fname in all_filenames:
+        if not other_fname or other_fname == filename:
+            continue
+
+        other_keywords = set(get_document_keywords(other_fname, top_n=30))
+        if not other_keywords:
+            continue
+
+        inter = target_keywords & other_keywords
+        union = target_keywords | other_keywords
+        if not union:
+            continue
+
+        score = len(inter) / len(union)
+        if score <= 0:
+            continue
+
+        results.append(
+            {
+                "filename": other_fname,
+                "score": float(score),
+            }
+        )
+
+    # Sort most similar first
+    results.sort(key=lambda x: x["score"], reverse=True)
+    return results[:top_k]

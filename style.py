@@ -120,13 +120,44 @@ header {visibility: hidden;}
 """
 
 
+RELATED_DOC_CSS = """
+.related-list {
+    margin-top: 4px;
+}
+
+.related-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    margin-bottom: 4px;
+    border-radius: 8px;
+    background: #f5f7ff;
+    font-size: 13px;
+}
+
+.related-item span.file {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 180px;
+}
+
+.related-item span.score {
+    font-weight: 600;
+    color: #2b59ff;
+    font-variant-numeric: tabular-nums;
+}
+"""
+
+
 # --------------------------------------------------------
 #  Inject CSS (Called once in app.py)
 # --------------------------------------------------------
 
 def inject_css():
     """Inject all global CSS styles into Streamlit."""
-    full_css = TAB_CSS + PDF_PREVIEW_CSS + GLOBAL_UI_CSS
+    full_css = TAB_CSS + PDF_PREVIEW_CSS + GLOBAL_UI_CSS + RELATED_DOC_CSS
     st.markdown(f"<style>{full_css}</style>", unsafe_allow_html=True)
     
 

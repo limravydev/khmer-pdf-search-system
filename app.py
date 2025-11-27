@@ -16,17 +16,19 @@ from search_engine import (
     clean_missing_files,
     get_index_stats,
     get_document_text,
-    get_document_keywords
+    get_document_keywords,
+    get_related_documents
 )
 
 from style import inject_css, FILE_LIST_CSS,HIDE_STREAMLIT_STYLE,inject_production_style
+inject_css()
 st.markdown(FILE_LIST_CSS, unsafe_allow_html=True)
 st.markdown(HIDE_STREAMLIT_STYLE, unsafe_allow_html=True)
 
 import os
 if os.environ.get("STREAMLIT_RUNTIME", "") == "cloud":
     inject_production_style()
-    
+
 st.markdown("""
 <style>
 /* Reduce spacing between buttons */
@@ -84,6 +86,12 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
+PDF_ICON = """
+<img src="https://cdn-icons-png.flaticon.com/512/337/337946.png"
+     width="26">
+"""
+
 # -------------------------------------------------------------------
 # Basic config
 # -------------------------------------------------------------------
@@ -94,7 +102,6 @@ st.set_page_config(
     page_title="Khmer PDF Keyword Search System",
     layout="wide",
 )
-inject_css()
 
 # Global CSS
 st.markdown(
@@ -113,6 +120,19 @@ st.markdown(
     max-width: 100% !important;
     height: auto !important;
     display: block;
+}
+
+/* keyword chips */
+.kw-chip {
+    display: inline-block;
+    padding: 3px 10px;
+    margin: 3px 4px 3px 0;
+    border-radius: 999px;
+    background-color: #e6f0ff;
+    color: #1f3b68;
+    font-size: 12px;
+    border: 1px solid #c8dbff;
+    white-space: nowrap;
 }
 </style>
 """,
@@ -193,6 +213,89 @@ def render_keyword_chips(keywords: list[str]) -> str:
         chips.append(f"<span class='keyword-chip'>{kw}</span>")
     return " ".join(chips)
 
+def render_document_details(filename: str):
+    """Show PDF preview + metadata + keywords for a selected document."""
+    pdf_path = os.path.join(PDF_DIR, filename)
+
+    if not os.path.exists(pdf_path):
+        st.warning("PDF file not found on disk.")
+        return
+
+    # ---- basic metadata ----
+    stat = os.stat(pdf_path)
+    size_mb = stat.st_size / (1024 * 1024)
+    created = dt.datetime.fromtimestamp(stat.st_ctime).strftime("%Y-%m-%d %H:%M")
+    modified = dt.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
+
+    # ---- keywords (from full indexed text) ----
+    try:
+        keywords = get_document_keywords(filename, top_n=5)
+    except Exception:
+        keywords = []
+
+    # HTML chips for keywords
+    chips_html = ""
+    for kw in keywords:
+        chips_html += (
+            f"<span class='kw-chip'>{kw}</span>"
+        )
+
+    # Layout: left preview, right metadata
+    col_left, col_right = st.columns([2, 1])
+
+    # ---- left: PDF preview (all pages, scrollable) ----
+    with col_left:
+        st.markdown("#### Preview")
+        pages = load_pdf_pages(pdf_path)
+        if pages:
+            html_images = pages_to_html(pages)
+            st.markdown(
+                f"<div class='pdf-scroll'>{html_images}</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.info("Cannot preview this PDF (conversion failed).")
+
+    # ---- right: metadata + keywords ----
+    with col_right:
+        st.markdown("#### Metadata")
+        st.markdown(f"**File name:** `{filename}`")
+        st.markdown(f"**Size:** {size_mb:.2f} MB")
+        st.markdown(f"**Created:** {created}")
+        st.markdown(f"**Modified:** {modified}")
+
+        st.markdown("#### Keywords")
+        if chips_html:
+            st.markdown(f"<div style='margin-top:4px;'>{chips_html}</div>", unsafe_allow_html=True)
+        else:
+            st.write("No keywords available for this document.")
+        # Related PDFs
+        st.markdown("#### Related PDFs")
+        related = get_related_documents(filename, top_k=3)
+
+        if related:
+            html = "<div class='related-list'>"
+            for r in related:
+                other_name = r["filename"]
+                score = r["score"]
+                html += f"""
+                <div class="related-item">
+                    <span class="file">📄 {other_name}</span>
+                    <span class="score">{score:.2f}</span>
+                </div>
+                """
+            html += "</div>"
+            st.markdown(html, unsafe_allow_html=True)
+        else:
+            st.caption("No similar PDFs found.")
+
+@st.dialog("Document details")
+def show_document_details_dialog(filename: str):
+    """
+    Open a modal dialog showing PDF preview + metadata + keywords
+    for the selected document.
+    """
+    render_document_details(filename)
 # -------------------------------------------------------------------
 # Sidebar: index stats
 # -------------------------------------------------------------------
@@ -303,38 +406,6 @@ with tab_upload:
                         )
                     st.success("Document indexed successfully ✅")
 
-    # st.divider()
-    # st.subheader("2. Indexed PDFs")
-
-    # indexed_files = stats.get("indexed_filenames", []) or []
-
-    # if not indexed_files:
-    #     st.info("No PDFs indexed yet. Upload, extract, and index a PDF above.")
-    # else:
-    #     for fname in indexed_files:
-    #         col1, col2, col3 = st.columns([4, 1.2, 1.5])
-    #         with col1:
-    #             st.write(f"📄 {fname}")
-    #         with col2:
-    #             if st.button("View text", key=f"view_{fname}"):
-    #                 full_text = get_document_text(fname)
-    #                 with st.expander(f"Full text of {fname}", expanded=False):
-    #                     st.write(full_text or "(No text in index)")
-
-    #         with col3:
-    #             pdf_path = os.path.join(PDF_DIR, fname)
-    #             if os.path.exists(pdf_path):
-    #                 with open(pdf_path, "rb") as f:
-    #                     pdf_bytes = f.read()
-    #                 st.download_button(
-    #                     "Download PDF",
-    #                     data=pdf_bytes,
-    #                     file_name=fname,
-    #                     mime="application/pdf",
-    #                     key=f"dl_{fname}",
-    #                 )
-    
-    
     st.divider()
     st.subheader("PDFs File List")
 
@@ -343,6 +414,7 @@ with tab_upload:
     if not indexed_files:
         st.info("No PDFs indexed yet. Upload, extract, and index a PDF above.")
     else:
+        # ===== Existing table header =====
         # Header row
         h1, h2, h3, h4, h5 = st.columns([0.5, 4, 1.2, 2.0, 2.5])
         with h1:
@@ -382,13 +454,12 @@ with tab_upload:
             )
 
             with c_icon:
-                st.markdown("📄")
+                st.markdown(PDF_ICON, unsafe_allow_html=True)
 
             with c_name:
                 st.markdown(f"**{fname}**")
-                
                 # NEW: document-level keywords
-                keywords = get_document_keywords(fname, top_n=8)
+                keywords = get_document_keywords(fname, top_n=5)
                 if keywords:
                     chips_html = render_keyword_chips(keywords)
                     st.markdown(chips_html, unsafe_allow_html=True)
@@ -422,15 +493,18 @@ with tab_upload:
             #                 key=f"dl_{fname}",
             #             )
             with c_actions:
-                b1, b2 = st.columns([1, 1])
+                b1, b2, b3 = st.columns([1, 1, 1])
 
                 # View text -> open dialog
                 with b1:
                     if st.button("📄 View text", key=f"view_{fname}"):
                         show_full_text_dialog(fname)
-
-                # Download (keep as-is)
+                # NEW: View details -> modal with preview + metadata + keywords
                 with b2:
+                    if st.button("🧾 Details", key=f"details_{fname}"):
+                        show_document_details_dialog(fname)
+                # Download (keep as-is)
+                with b3:
                     if os.path.exists(pdf_path):
                         with open(pdf_path, "rb") as f:
                             pdf_bytes = f.read()
@@ -447,9 +521,7 @@ with tab_upload:
 # Tab 2: Search
 # -------------------------------------------------------------------
 with tab_search:
-    st.markdown('<div class="result-card">', unsafe_allow_html=True)
     st.subheader("Search in indexed PDFs (exact keyword, page-level)")
-
     query = st.text_input("Keyword to search", key="query_input")
 
     # Results per search
@@ -469,7 +541,7 @@ with tab_search:
                 results = search(query, k=k)
                 elapsed = time.time() - t0
 
-            st.caption(f"Search time (backend): {elapsed:.3f} seconds")
+            st.caption(f"Search time : {elapsed:.3f} seconds")
 
             if not results:
                 st.info("No pages matched your keyword.")
@@ -488,14 +560,14 @@ with tab_search:
                     row1_col1, row1_col2 = st.columns([4, 1.5])
 
                     with row1_col1:
-                        st.markdown(f"### 📄 {title}")
+                        st.markdown(f"### {PDF_ICON} {title}", unsafe_allow_html=True)
                     with row1_col2:
                         pdf_path = os.path.join(PDF_DIR, filename)
                         if os.path.exists(pdf_path):
                             with open(pdf_path, "rb") as f:
                                 pdf_bytes = f.read()
                             st.download_button(
-                                "⬇️ Download PDF",
+                                "⬇️ Download",
                                 data=pdf_bytes,
                                 file_name=filename,
                                 mime="application/pdf",
