@@ -11,6 +11,9 @@ Steps per page:
      choose the best by a simple text score.
 
 Everything is OCR – we do not use pdfplumber text extraction.
+
+
+Input Color Image =>  Grayscale => Boost Contrast => Make Bigger => Blur Noise => Force Black & White => OCR
 """
 
 import pdfplumber
@@ -56,19 +59,24 @@ def score_text(text: str) -> int:
 # Preprocessing
 # -----------------------------
 
+# Enhance image quality before OCR
 def preprocess_for_ocr(pil_img: Image.Image) -> Image.Image:
     """Enhance image quality before OCR."""
     img = pil_img.convert("L")  # grayscale
+    # autocontrast
     img = ImageOps.autocontrast(img)
 
+    # upscale small images
     w, h = img.size
     if max(w, h) < 2000:
         img = img.resize((w * 2, h * 2), Image.LANCZOS)
 
+    # noise reduction
     img = img.filter(ImageFilter.MedianFilter(size=3))
 
     # threshold
     img = img.point(lambda x: 0 if x < 180 else 255, mode="1")
+    # convert back to grayscale for Tesseract
     img = img.convert("L")
     return img
 
@@ -87,6 +95,7 @@ def run_ocr_once(pil_img: Image.Image, angle: int) -> tuple[str, int]:
 
     img = preprocess_for_ocr(pil_img)
 
+    #tells Tesseract to use the LSTM (Neural Network) Engine. This is the modern engine required for high accuracy.
     config = "--oem 1 --psm 6"
     try:
         text = pytesseract.image_to_string(img, lang="khm+eng", config=config)
@@ -177,6 +186,7 @@ def extract_text_from_pdf(pdf_path: str) -> str:
 
                 # Render page to image
                 try:
+                    # 300 DPI for better OCR accuracy (default is 72)
                     pil_img = page.to_image(resolution=300).original
                 except Exception:
                     pages_output.append(

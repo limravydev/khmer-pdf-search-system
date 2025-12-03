@@ -27,12 +27,10 @@ The system includes a built-in PDF previewer, an editable OCR text panel, and a 
 - Users can correct OCR mistakes manually  
 - Updated text can be re-indexed instantly
 
-### **4. Semantic Search Engine**
-- Uses Sentence-Transformers embeddings  
-- FAISS CPU index for fast similarity search  
+### **4. Search Engine**
 - Supports Khmer and English queries  
 - Highlights exact text matches  
-- Returns both semantic matches and literal keyword matches
+- Returnsliteral keyword matches
 
 ### **5. PDF Management**
 - Upload new PDFs  
@@ -51,7 +49,6 @@ The system includes a built-in PDF previewer, an editable OCR text panel, and a 
 | OCR | Pytesseract + Tesseract-OCR |
 | PDF Rendering | pdfplumber + Pillow |
 | Embeddings | Sentence-Transformers |
-| Vector Index | FAISS CPU |
 | Storage | JSON-based local index |
 
 ---
@@ -76,7 +73,7 @@ khmer-pdf-search-system/
 
 ### 1. Clone the repo
 ```bash
-git clone https://github.com/<your-username>/khmer-pdf-search-system.git
+git clone https://github.com/limravydev/khmer-pdf-search-system.git
 cd khmer-pdf-search-system
 ```
 

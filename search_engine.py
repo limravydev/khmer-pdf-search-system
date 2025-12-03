@@ -29,28 +29,56 @@ docs: List[Dict[str, Any]] = []
 # Stopwords for keyword extraction
 # -------------------------------
 
-# Basic English stopwords
-EN_STOPWORDS = {
-    "the", "and", "or", "of", "to", "in", "for", "on", "a", "an",
-    "is", "are", "was", "were", "this", "that", "it", "as", "at",
-    "by", "with", "from", "be", "has", "have", "had", "you", "we",
-    "they", "i", "my", "our", "your", "their", "but", "so", "if",
-    "then", "than", "also", "too", "very","[PAGE"
-}
+# -------------------------------
+# Dynamic Stopword Loading
+# -------------------------------
 
-# Khmer stopwords (function words, particles, common grammar words)
-KHMER_STOPWORDS = {
-    "ជា", "ដែល", "បាន", "កំពុង", "នឹង", "ក៏", "ហើយ", "និង", "ដែរ",
-    "នៅ", "ក្នុង", "ដោយ", "ពី", "ទៅ", "តាម", "លើ", "ក្រោម", "ចំពោះ",
-    "ជា​មួយ", "ជាមួយ", "សម្រាប់", "រយៈ", "ពេល", "អំឡុង", "ក្រោយ", "មុន",
-    "នោះ", "នេះ", "នាយ", "ន័យ", "នៃ", "របស់", "អស់", "ទាំង", "ទាំងអស់",
-    "គ្រប់", "មួយ", "ពីរ", "បី", "ច្រើន", "តិច", "ខ្លះ", "ខ្លះៗ",
-    "ប៉ុន្តែ", "តែ", "ទោះបីជា", "ទោះបី", "ដូចជា", "ដូចជា​ក៏", "ដូច្នេះ",
-    "ហេតុអ្វី", "ព្រោះ", "ដោយ​សារ", "ដោយសារ", "សារៈ", "គឺ", "គឺជា",
-    "លើកលែងតែ", "ចំពោះ", "ទោះ​យ៉ាងណា", "បើ", "ប្រសិនបី", "បើសិនជា",
-    "អ៊ីចឹង", "បន្ទាប់មក", "បន្ទាប់ពី", "នៅពេលដែល", "ពេលដែល", "ពេល",
-    "ពេលណា", "ពេលខ្លះ", "មែនទេ", "ទេ", "ហើយ​ក៏", "ហើយ​ដែរ",
-}
+def load_stopwords(file_path: str) -> set:
+    """Load stopwords from a text file (one word per line)."""
+    if not os.path.exists(file_path):
+        print(f"Warning: Stopword file not found: {file_path}")
+        return set()
+    
+    with open(file_path, "r", encoding="utf-8") as f:
+        # Read lines, strip whitespace, ignore empty lines and comments (#)
+        words = {line.strip().lower() for line in f if line.strip() and not line.startswith("#")}
+    return words
+
+# Define paths
+STOPWORD_DIR = "resources"
+EN_PATH = os.path.join(STOPWORD_DIR, "stopwords_en.txt")
+KH_PATH = os.path.join(STOPWORD_DIR, "stopwords_kh.txt")
+
+# Load sets
+EN_STOPWORDS = load_stopwords(EN_PATH)
+KHMER_STOPWORDS = load_stopwords(KH_PATH)
+
+# Add custom "Project Specific" junk words programmatically if needed
+CUSTOM_JUNK = {"[page", "ocr", "angle", "file", "scanned", "camscanner"}
+EN_STOPWORDS.update(CUSTOM_JUNK)
+
+# Basic English stopwords
+# EN_STOPWORDS = {
+#     "the", "and", "or", "of", "to", "in", "for", "on", "a", "an",
+#     "is", "are", "was", "were", "this", "that", "it", "as", "at",
+#     "by", "with", "from", "be", "has", "have", "had", "you", "we",
+#     "they", "i", "my", "our", "your", "their", "but", "so", "if",
+#     "then", "than", "also", "too", "very","[PAGE"
+# }
+
+# # Khmer stopwords (function words, particles, common grammar words)
+# KHMER_STOPWORDS = {
+#     "ជា", "ដែល", "បាន", "កំពុង", "នឹង", "ក៏", "ហើយ", "និង", "ដែរ",
+#     "នៅ", "ក្នុង", "ដោយ", "ពី", "ទៅ", "តាម", "លើ", "ក្រោម", "ចំពោះ",
+#     "ជា​មួយ", "ជាមួយ", "សម្រាប់", "រយៈ", "ពេល", "អំឡុង", "ក្រោយ", "មុន",
+#     "នោះ", "នេះ", "នាយ", "ន័យ", "នៃ", "របស់", "អស់", "ទាំង", "ទាំងអស់",
+#     "គ្រប់", "មួយ", "ពីរ", "បី", "ច្រើន", "តិច", "ខ្លះ", "ខ្លះៗ",
+#     "ប៉ុន្តែ", "តែ", "ទោះបីជា", "ទោះបី", "ដូចជា", "ដូចជា​ក៏", "ដូច្នេះ",
+#     "ហេតុអ្វី", "ព្រោះ", "ដោយ​សារ", "ដោយសារ", "សារៈ", "គឺ", "គឺជា",
+#     "លើកលែងតែ", "ចំពោះ", "ទោះ​យ៉ាងណា", "បើ", "ប្រសិនបី", "បើសិនជា",
+#     "អ៊ីចឹង", "បន្ទាប់មក", "បន្ទាប់ពី", "នៅពេលដែល", "ពេលដែល", "ពេល",
+#     "ពេលណា", "ពេលខ្លះ", "មែនទេ", "ទេ", "ហើយ​ក៏", "ហើយ​ដែរ",
+# }
 
 
 # -------------------------------------------------------------------
@@ -361,6 +389,7 @@ def extract_top_keywords(text: str, top_n: int = 10) -> list:
             continue
 
         # remove tokens that are only digits or punctuation
+        # remove pure digits, symbols, punctuation, etc.
         if re.fullmatch(r"[\d\W_]+", tok, flags=re.UNICODE):
             continue
 
@@ -388,6 +417,8 @@ def clean_keywords(keywords):
         if not k:
             continue
 
+        #trimmer
+        #Converts all capital letters to lowercase.
         # Normalize
         k = k.strip().lower()
 
